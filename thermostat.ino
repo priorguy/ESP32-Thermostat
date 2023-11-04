@@ -33,7 +33,10 @@ float offset[4] = {0};  // Offset to adjust when the pump is turned on/off
 float offsetValues[4][10] = {0};  // Array to store the last 10 offset values for each room
 int offsetIndex[4] = {0};  // Index to keep track of the current offset value for each room
 const unsigned long reconnectInterval = 30 * 1000;  // 30 seconds
-unsigned long lastReconnectAttempt = 0;
+unsigned long lastReconnectAttempt = 0;\
+
+// Static assert to ensure numCycles matches the size of offsetValues array
+static_assert(sizeof(offsetValues[0]) / sizeof(offsetValues[0][0]) == numCycles, "numCycles does not match the size of offsetValues array");
 
 void setup() {
   Serial.begin(115200);
@@ -106,42 +109,42 @@ void updateSetpoints(int room) {
   float temp = sensors[room].getTempCByIndex(0);  // Current temperature
   float currentOffset = 0;
 
-  if (digitalRead(relayPins[room]) == HIGH) {  // If the pump is on
-    if (temp > setpoints[room] + hysteresis) {  // If temperature exceeds the setpoint plus hysteresis
-      currentOffset = temp - (setpoints[room] + hysteresis / 2);  // Calculate current offset
-    }
-  } else {  // If the pump is off
-    if (temp < setpoints[room] - hysteresis) {  // If temperature falls below the setpoint minus hysteresis
-      currentOffset = (setpoints[room] - hysteresis / 2) - temp;  // Calculate current offset
-    }
+  // Determine the current offset based on the relay state and temperature
+  bool isHeatingOn = digitalRead(relayPins[room]) == HIGH;
+  if (isHeatingOn && temp > setpoints[room] + hysteresis) {
+    currentOffset = temp - (setpoints[room] + hysteresis / 2);
+  } else if (!isHeatingOn && temp < setpoints[room] - hysteresis) {
+    currentOffset = (setpoints[room] - hysteresis / 2) - temp;
   }
 
-  offsetValues[room][offsetIndex[room]] = currentOffset;  // Store current offset
-  offsetIndex[room] = (offsetIndex[room] + 1) % 10;  // Update the index for next cycle
+  // Update the offset values array and index for the room
+  offsetValues[room][offsetIndex[room]] = currentOffset;
+  offsetIndex[room] = (offsetIndex[room] + 1) % numCycles;  // Assuming numCycles is the size of offsetValues array
 
-  // Calculate the average offset excluding values with more than 20% deviation from the average
+  // Calculate the average offset
   float sum = 0;
-  float count = 0;
-  for (int i = 0; i < 10; i++) {
+  float validOffsetsCount = 0;
+  for (int i = 0; i < numCycles; i++) {
     sum += offsetValues[room][i];
   }
-  float average = sum / 10;
+  float average = sum / numCycles;
 
-  // Check for zero average to avoid division by zero in the next block
-  if (average != 0) {
-    sum = 0;
-    for (int i = 0; i < 10; i++) {
-      if (abs(offsetValues[room][i] - average) < 0.2 * average) {  // Check for deviation less than 20%
-        sum += offsetValues[room][i];
-        count++;
-      }
-    }
-    if (count > 0) {
-      float adjustedAverage = sum / count;
-      offset[room] = adjustedAverage;  // Update offset with the adjusted average
+  // Adjust the average based on deviation
+  sum = 0; // Reset sum to use for adjusted average calculation
+  for (int i = 0; i < numCycles; i++) {
+    // Include only values within 20% deviation from the average
+    if (abs(offsetValues[room][i] - average) < 0.2 * average) {
+      sum += offsetValues[room][i];
+      validOffsetsCount++;
     }
   }
+
+  // Update the offset for the room if there are valid offsets
+  if (validOffsetsCount > 0) {
+    offset[room] = sum / validOffsetsCount;
+  }
 }
+
 
 
 // BLYNK_WRITE functions to update setpoints when the Slider or Step widgets are changed
